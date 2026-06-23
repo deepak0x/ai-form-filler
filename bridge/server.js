@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Local bridge: receives scanned form fields, asks your Claude Code (Max auth)
+// Local bridge: receives scanned form fields, asks your local Claude Code (subscription auth)
 // to match them against profile.json, returns the answers. No API key used.
 
 const http = require('http');
@@ -107,5 +107,5 @@ const server = http.createServer((req, res) => {
 server.listen(PORT, HOST, () => {
   console.log(`Form-filler bridge running on http://${HOST}:${PORT}`);
   console.log(`Profile: ${PROFILE_PATH}`);
-  console.log('Keep this terminal open. Make sure `claude` is logged in (Max).');
+  console.log('Keep this terminal open. Make sure `claude` is logged in.');
 });

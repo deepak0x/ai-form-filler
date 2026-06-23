@@ -1,7 +1,7 @@
-# AI Form Filler (Claude Max)
+# AI Form Filler (Local Claude)
 
 Auto-fills Google Forms from your saved profile (`profile.json`), using your **local Claude Code
-on the Max subscription** as the brain — **no Anthropic API key needed**.
+subscription** as the brain — **no API key needed**.
 
 It's dynamic: the extension scans whatever fields are on the page (no pasting questions), Claude
 matches them to your data, and the fields get filled. Optionally it auto-submits.
@@ -10,14 +10,15 @@ matches them to your data, and the fields get filled. Optionally it auto-submits
 Google Form tab (you're logged in)
   └─ content.js  scans fields → fills answers → optional auto-submit
        └─ background.js → POST http://127.0.0.1:8731/fill
-            └─ server.js  runs `claude -p` (Max auth) → returns answers
+            └─ server.js  runs `claude -p` (your local subscription) → returns answers
 ```
 
 ## Features
 
 - **Dynamic scanning** — reads whatever fields are on the page (text, paragraph, radio, checkbox,
   dropdown). No need to pre-define questions.
-- **AI matching on Claude Max** — a local bridge runs `claude -p`, so there's no API key or cost.
+- **AI matching on local Claude** — a local bridge runs `claude -p` on your Claude Code
+  subscription, so there's no API key or cost.
 - **Progress panel** — a small card shows scanning → asking AI → filling, with a live bar.
 - **Ask-me for unknowns** — any field the AI can't answer from your data is shown in the panel
   with an editor (text box / dropdown / checkboxes); you fill it and it's written into the form.
@@ -34,7 +35,7 @@ Google Form tab (you're logged in)
    `profile.json` is gitignored, so your personal data is never committed. The more you fill in,
    the more forms it can answer; it never invents values that aren't in the file.
 
-2. **Make sure Claude is logged in** (Max): run `claude` once in a terminal if unsure.
+2. **Make sure Claude is logged in**: run `claude` once in a terminal if unsure.
 
 3. **Load the extension**
    - Open `chrome://extensions`

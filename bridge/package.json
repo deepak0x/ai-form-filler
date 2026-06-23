@@ -1,0 +1,10 @@
+{
+  "name": "form-filler-bridge",
+  "version": "1.0.0",
+  "description": "Local bridge that runs `claude -p` (Claude Max) to answer scanned form fields.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "license": "MIT"
+}

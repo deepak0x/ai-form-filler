@@ -1,0 +1,12 @@
+# Your real personal data — never commit this
+profile.json
+
+# Resumes / CVs / documents that may sit in the repo
+*.pdf
+*.doc
+*.docx
+
+# Node / OS junk
+node_modules/
+.DS_Store
+*.log

@@ -1,0 +1,26 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <style>
+    body { font: 13px system-ui, sans-serif; width: 250px; padding: 14px; margin: 0; }
+    h1 { font-size: 14px; margin: 0 0 10px; }
+    .row { display: flex; align-items: center; gap: 8px; margin: 10px 0; }
+    button { width: 100%; padding: 9px; margin-top: 6px; cursor: pointer;
+             border: 0; border-radius: 6px; background: #2d6cdf; color: #fff; font-size: 13px; }
+    button:hover { background: #245bc0; }
+    #status { margin-top: 12px; font-size: 12px; color: #666; }
+    .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; vertical-align: middle; }
+  </style>
+</head>
+<body>
+  <h1>AI Form Filler</h1>
+  <div class="row">
+    <input type="checkbox" id="autoSubmit" />
+    <label for="autoSubmit">Auto-submit after filling</label>
+  </div>
+  <button id="fill">Fill this form now</button>
+  <div id="status"><span class="dot" style="background:#bbb"></span>checking bridge…</div>
+  <script src="popup.js"></script>
+</body>
+</html>

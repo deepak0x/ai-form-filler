@@ -18,4 +18,19 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       .catch(e => sendResponse({ ok: false, error: String(e.message || e) }));
     return true; // keep the message channel open for the async response
   }
+
+  if (msg.type === 'REMEMBER') {
+    fetch(`${BRIDGE}/remember`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items: msg.items })
+    })
+      .then(async r => {
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || `bridge ${r.status}`);
+        sendResponse({ ok: true, saved: data.saved });
+      })
+      .catch(e => sendResponse({ ok: false, error: String(e.message || e) }));
+    return true;
+  }
 });

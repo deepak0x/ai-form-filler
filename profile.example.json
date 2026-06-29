@@ -36,5 +36,6 @@
   "competitive_programming": "",
   "achievements": [],
   "bio": "One or two sentences about who you are and what you build.",
-  "notes": "Use primary_email for all email questions. Only answer from this data; do not invent values not present here. In free-text 'about you' answers, do not mention anything you don't want shared."
+  "notes": "Use primary_email for all email questions. Only answer from this data; do not invent values not present here. In free-text 'about you' answers, do not mention anything you don't want shared.",
+  "learned_answers": []
 }

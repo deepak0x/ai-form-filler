@@ -183,9 +183,24 @@
   function setNativeValue(el, value) {
     const proto =
       el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    el.focus();
     Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, value);
     el.dispatchEvent(new Event('input', { bubbles: true }));
     el.dispatchEvent(new Event('change', { bubbles: true }));
+    el.dispatchEvent(new Event('blur', { bubbles: true }));
+  }
+
+  // Verify a field actually holds a value (so we never claim a silent failure as "filled").
+  function isFilled(reg) {
+    if (!reg) return false;
+    if (reg.kind === 'text' || reg.kind === 'textarea') return !!(reg.el.value || '').trim();
+    if (reg.kind === 'radio' || reg.kind === 'checkbox')
+      return reg.els.some(e => e.getAttribute('aria-checked') === 'true');
+    if (reg.kind === 'dropdown') {
+      const sel = reg.listbox.querySelector('[role="option"][aria-selected="true"]');
+      return !!(sel && sel.getAttribute('data-value'));
+    }
+    return false;
   }
 
   async function fillOne(reg, ans) {
@@ -257,14 +272,16 @@
 
   /* --------------------- Inline prompt for unknown fields ------------------- */
   // Renders a small editor per undecided field; returns a getter for the values.
-  function renderUnknowns(unknowns) {
+  function renderUnknowns(unknowns, answers) {
     note(
-      `I couldn't decide ${unknowns.length} field${unknowns.length > 1 ? 's' : ''} from your saved data. ` +
-        `Fill what you can below, then click “Fill these in”.`,
+      `I need your input on ${unknowns.length} field${unknowns.length > 1 ? 's' : ''} ` +
+        `(couldn't decide, or the value didn't apply). Review/edit below, then click “Fill these in”. ` +
+        `I'll remember what you enter for next time.`,
       '#fef7e0'
     );
     const inputs = {};
     for (const f of unknowns) {
+      const pre = answers ? answers[f.id] : null;
       const wrap = document.createElement('div');
       wrap.style.cssText = 'margin:10px 0';
       const lab = document.createElement('div');
@@ -277,6 +294,7 @@
         sel.style.cssText = inStyle();
         sel.appendChild(new Option('— choose —', ''));
         (f.options || []).forEach(o => sel.appendChild(new Option(o, o)));
+        if (typeof pre === 'string' && (f.options || []).includes(pre)) sel.value = pre;
         wrap.appendChild(sel);
         inputs[f.id] = () => sel.value || null;
       } else if (f.type === 'checkbox') {
@@ -287,6 +305,7 @@
           const cb = document.createElement('input');
           cb.type = 'checkbox';
           cb.value = o;
+          cb.checked = Array.isArray(pre) && pre.includes(o);
           row.append(cb, document.createTextNode(o));
           wrap.appendChild(row);
           boxes.push(cb);
@@ -296,6 +315,7 @@
         const inp = document.createElement(f.type === 'paragraph' ? 'textarea' : 'input');
         inp.style.cssText = inStyle();
         inp.placeholder = 'Your answer';
+        if (typeof pre === 'string') inp.value = pre;
         wrap.appendChild(inp);
         inputs[f.id] = () => inp.value.trim() || null;
       }
@@ -335,23 +355,28 @@
         return;
       }
 
-      // Fill what the AI decided, updating the progress bar per field.
+      // Fill what the AI decided, then VERIFY each field actually took the value.
       const answers = resp.answers || {};
       let done = 0;
       UI.progress(0, total);
       for (const f of fields) {
-        if (await fillOne(registry[f.id], answers[f.id])) {
-          done++;
-          UI.progress(done, total);
-          UI.status(`Filling… ${done}/${total}`);
+        const reg = registry[f.id];
+        const ans = answers[f.id];
+        if (!isEmpty(ans)) {
+          await fillOne(reg, ans);
+          await sleep(50);
+          if (!isFilled(reg)) { await fillOne(reg, ans); await sleep(60); } // one retry
         }
+        if (isFilled(reg)) done++;
+        UI.progress(done, total);
+        UI.status(`Filling… ${done}/${total}`);
       }
       ensureExtras();
       afterFill(answers, done, resp.resumePath);
     });
 
     function afterFill(answers, done, resumePath) {
-      const unknowns = fields.filter(f => isEmpty(answers[f.id]));
+      const unknowns = fields.filter(f => !isFilled(registry[f.id]));
       UI.clearList();
       UI.progress(done, total || 1);
       UI.status(`Filled ${done} of ${total} field${total === 1 ? '' : 's'}.`);
@@ -372,17 +397,31 @@
       };
 
       if (unknowns.length) {
-        const inputs = renderUnknowns(unknowns);
+        const inputs = renderUnknowns(unknowns, answers);
         button('Fill these in', true, async () => {
           let added = 0;
+          const toRemember = [];
           for (const f of unknowns) {
             const val = inputs[f.id]();
-            if (await fillOne(registry[f.id], val)) added++;
+            if (isEmpty(val)) continue;
+            await fillOne(registry[f.id], val);
+            await sleep(50);
+            if (!isFilled(registry[f.id])) { await fillOne(registry[f.id], val); await sleep(60); }
+            if (isFilled(registry[f.id])) {
+              added++;
+              toRemember.push({ question: f.question, answer: val });
+            }
           }
           UI.clearList();
           UI.footer().innerHTML = '';
           UI.progress(done + added, total);
           UI.status(`Done — filled ${done + added} of ${total}. Review and submit.`);
+          if (toRemember.length) {
+            chrome.runtime.sendMessage({ type: 'REMEMBER', items: toRemember }, r => {
+              if (r && r.ok)
+                note(`✓ Saved ${r.saved} answer(s) — I'll reuse them on future forms.`, '#e6f4ea');
+            });
+          }
           if (fileFields.length)
             note('Don’t forget the resume upload (click “Add File”).', '#fef7e0');
           finishBtn();

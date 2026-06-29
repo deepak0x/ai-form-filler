@@ -16,9 +16,24 @@ function loadProfile() {
 }
 
 function buildPrompt(profile, fields) {
+  // Surface any previously-learned answers so the AI reuses them verbatim.
+  let learned = '';
+  try {
+    const p = JSON.parse(profile);
+    if (Array.isArray(p.learned_answers) && p.learned_answers.length) {
+      learned =
+        '\n\nThe user previously answered these questions by hand. REUSE the saved answer ' +
+        'whenever the same or a clearly equivalent question appears:\n' +
+        p.learned_answers
+          .map(la => `- Q: ${la.question}\n  A: ${JSON.stringify(la.answer)}`)
+          .join('\n');
+    }
+  } catch (_) {}
+
   return `You are filling out a web form on behalf of a person. Everything known about them is in this JSON:
 
 ${profile}
+${learned}
 
 Below are the form questions scanned from the page (JSON array). Each item has: id, question, type, and (for choice fields) options.
 
@@ -73,15 +88,39 @@ const server = http.createServer((req, res) => {
     return res.end('{"ok":true}');
   }
 
-  if (req.method !== 'POST' || req.url !== '/fill') {
+  if (req.method !== 'POST' || (req.url !== '/fill' && req.url !== '/remember')) {
     res.writeHead(404, { 'Content-Type': 'application/json' });
     return res.end('{"error":"not found"}');
   }
 
+  const route = req.url;
   let body = '';
   req.on('data', c => (body += c));
   req.on('end', async () => {
     try {
+      if (route === '/remember') {
+        const { items } = JSON.parse(body || '{}');
+        const profile = JSON.parse(loadProfile());
+        if (!Array.isArray(profile.learned_answers)) profile.learned_answers = [];
+        let saved = 0;
+        for (const it of items || []) {
+          if (!it || !it.question || it.answer === null || it.answer === undefined || it.answer === '')
+            continue;
+          const norm = String(it.question).trim().toLowerCase();
+          const existing = profile.learned_answers.find(
+            x => String(x.question).trim().toLowerCase() === norm
+          );
+          if (existing) existing.answer = it.answer;
+          else profile.learned_answers.push({ question: it.question, answer: it.answer });
+          saved++;
+        }
+        fs.writeFileSync(PROFILE_PATH, JSON.stringify(profile, null, 2));
+        console.log(`[remember] saved ${saved} answer(s); ${profile.learned_answers.length} total`);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: true, saved }));
+      }
+
+      // route === '/fill'
       const { fields } = JSON.parse(body || '{}');
       if (!Array.isArray(fields) || fields.length === 0) {
         throw new Error('Request must include a non-empty "fields" array');

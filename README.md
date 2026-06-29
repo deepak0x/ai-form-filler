@@ -20,8 +20,12 @@ Google Form tab (you're logged in)
 - **AI matching on local Claude** — a local bridge runs `claude -p` on your Claude Code
   subscription, so there's no API key or cost.
 - **Progress panel** — a small card shows scanning → asking AI → filling, with a live bar.
-- **Ask-me for unknowns** — any field the AI can't answer from your data is shown in the panel
-  with an editor (text box / dropdown / checkboxes); you fill it and it's written into the form.
+- **Verify-and-ask** — after filling, each field is checked to confirm the value actually stuck.
+  Anything the AI couldn't decide (or that silently failed to apply) is shown in the panel with an
+  editor (text box / dropdown / checkboxes), pre-filled with the AI's best guess; you fix it and it's
+  written into the form.
+- **Learns your answers** — anything you fill by hand is saved to your profile (`learned_answers`)
+  and reused automatically when the same or a related question appears on future forms.
 - **Built-in toggles** — ticks "Record my email" and "Send me a copy of my responses" when present.
 - **Optional auto-submit** — fill and submit hands-free once you trust it.
 

@@ -16,13 +16,18 @@ fetch('http://127.0.0.1:8731/health')
   .then(() => setStatus('#2ecc71', 'Bridge: connected'))
   .catch(() => setStatus('#c0392b', 'Bridge: not running — start server.js'));
 
-// Manual re-trigger: re-inject the content script into the active tab.
+// Start: inject the content script into the active tab, which scans + fills.
+// Works on any ordinary web page (via activeTab) — Google Forms or plain HTML.
 document.getElementById('fill').addEventListener('click', async () => {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab || !/^https:\/\/docs\.google\.com\/forms\//.test(tab.url || '')) {
-    setStatus('#e67e22', 'Open a Google Form first');
+  if (!tab || !/^https?:\/\//.test(tab.url || '')) {
+    setStatus('#e67e22', 'Open a web page with a form first');
     return;
   }
-  await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
-  window.close();
+  try {
+    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
+    window.close();
+  } catch (e) {
+    setStatus('#c0392b', 'Can’t run on this page: ' + (e.message || e));
+  }
 });

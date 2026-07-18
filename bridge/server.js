@@ -88,6 +88,29 @@ const server = http.createServer((req, res) => {
     return res.end('{"ok":true}');
   }
 
+  // Serve the resume bytes so the extension can auto-attach it to native file inputs.
+  if (req.method === 'GET' && req.url === '/resume') {
+    let resumePath = null;
+    try { resumePath = JSON.parse(loadProfile()).resume_path || null; } catch (_) {}
+    if (!resumePath || !fs.existsSync(resumePath)) {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      return res.end('{"error":"resume_path not set in profile.json, or the file is missing"}');
+    }
+    const name = path.basename(resumePath);
+    const ext = path.extname(name).toLowerCase();
+    const mime =
+      ext === '.pdf' ? 'application/pdf' :
+      ext === '.doc' ? 'application/msword' :
+      ext === '.docx' ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' :
+      ext === '.txt' ? 'text/plain' :
+      'application/octet-stream';
+    res.writeHead(200, {
+      'Content-Type': mime,
+      'Content-Disposition': `inline; filename="${name}"`
+    });
+    return fs.createReadStream(resumePath).pipe(res);
+  }
+
   if (req.method !== 'POST' || (req.url !== '/fill' && req.url !== '/remember')) {
     res.writeHead(404, { 'Content-Type': 'application/json' });
     return res.end('{"error":"not found"}');

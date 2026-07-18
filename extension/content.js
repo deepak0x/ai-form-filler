@@ -1,11 +1,14 @@
-// Scans the current Google Form, asks the bridge for answers, fills the fields,
-// shows a friendly progress panel, and prompts you inline for anything the AI
-// couldn't decide. Targets stable ARIA roles to survive Google's CSS churn.
+// Injected on demand (when you click "Start" in the popup). Scans the form on the
+// current page — Google Forms OR any ordinary HTML form — asks the bridge for
+// answers, fills the fields, shows a progress panel, and prompts you inline for
+// anything the AI couldn't decide.
 
 (() => {
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   const isEmpty = a =>
     a === null || a === undefined || a === '' || (Array.isArray(a) && a.length === 0);
+  const clean = s =>
+    String(s || '').replace(/\s+/g, ' ').replace(/\s*\*\s*$/, '').trim();
 
   /* ----------------------------- Progress panel ----------------------------- */
   const UI = (() => {
@@ -106,17 +109,170 @@
     return b;
   }
 
-  /* ----------------------------- Form scanning ----------------------------- */
+  /* --------------------------- Form detection ------------------------------ */
+  function isGoogleForm() {
+    return (
+      (location.hostname === 'docs.google.com' && location.pathname.startsWith('/forms')) ||
+      !!document.querySelector('div[role="listitem"] [role="heading"]')
+    );
+  }
+
+  function isScannable(el) {
+    const tag = el.tagName.toLowerCase();
+    const type = (el.type || '').toLowerCase();
+    if (tag === 'input' &&
+        ['hidden', 'submit', 'button', 'image', 'reset', 'password'].includes(type))
+      return false;
+    if (el.disabled || el.readOnly) return false;
+    if (el.closest('[aria-hidden="true"]')) return false;
+    if (type === 'radio' || type === 'checkbox')
+      return el.offsetParent !== null || !!el.closest('label'); // often visually replaced
+    if (tag === 'input' && type === 'file') return true;
+    const r = el.getBoundingClientRect();
+    return el.offsetParent !== null && r.width > 0 && r.height > 0;
+  }
+
+  function hasNativeFields() {
+    return [...document.querySelectorAll('input,textarea,select')].some(isScannable);
+  }
+
   async function waitForForm(timeout = 8000) {
     const start = Date.now();
+    const ready = () =>
+      document.querySelector('div[role="listitem"]') || hasNativeFields();
     while (Date.now() - start < timeout) {
-      if (document.querySelector('div[role="listitem"]')) return true;
+      if (ready()) return true;
       await sleep(300);
     }
     return false;
   }
 
-  function scanForm() {
+  /* -------------------- Label detection (generic forms) -------------------- */
+  function nearbyQuestion(el) {
+    let node = el;
+    for (let depth = 0; depth < 4 && node; depth++, node = node.parentElement) {
+      let sib = node.previousElementSibling;
+      for (let i = 0; i < 3 && sib; i++, sib = sib.previousElementSibling) {
+        const t = (sib.innerText || '').trim();
+        if (t && t.length <= 200) return t;
+      }
+    }
+    return '';
+  }
+
+  function getLabel(el) {
+    if (el.id) {
+      const l = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+      if (l && l.innerText.trim()) return clean(l.innerText);
+    }
+    const wrap = el.closest('label');
+    if (wrap && wrap.innerText.trim()) return clean(wrap.innerText);
+    const al = el.getAttribute('aria-label');
+    if (al && al.trim()) return clean(al);
+    const lb = el.getAttribute('aria-labelledby');
+    if (lb) {
+      const t = lb
+        .split(/\s+/)
+        .map(id => document.getElementById(id)?.innerText || '')
+        .join(' ')
+        .trim();
+      if (t) return clean(t);
+    }
+    if (el.placeholder && el.placeholder.trim()) return clean(el.placeholder);
+    if (el.title && el.title.trim()) return clean(el.title);
+    const near = nearbyQuestion(el);
+    if (near) return clean(near);
+    return clean(el.name || el.id || '');
+  }
+
+  function groupQuestion(inputs) {
+    const fs = inputs[0].closest('fieldset');
+    if (fs) {
+      const lg = fs.querySelector('legend');
+      if (lg && lg.innerText.trim()) return clean(lg.innerText);
+    }
+    const q = nearbyQuestion(inputs[0]);
+    if (q) return clean(q);
+    return clean(inputs[0].name || 'field');
+  }
+
+  /* ------------------------ Scan: generic HTML form ------------------------ */
+  function scanGeneric() {
+    const fields = [];
+    const fileFields = [];
+    const registry = {};
+    const all = [...document.querySelectorAll('input,textarea,select')].filter(isScannable);
+    const handled = new Set();
+    let idx = 0;
+    const nextId = () => 'q' + idx++;
+
+    for (const el of all) {
+      if (handled.has(el)) continue;
+      handled.add(el);
+      const tag = el.tagName.toLowerCase();
+      const type = (el.type || '').toLowerCase();
+      const id = nextId();
+
+      if (tag === 'input' && type === 'file') {
+        registry[id] = { kind: 'file-native', el };
+        fileFields.push({ id, question: getLabel(el) || 'File upload' });
+        continue;
+      }
+
+      if (type === 'radio' || type === 'checkbox') {
+        const group = el.name
+          ? all.filter(x => (x.type || '').toLowerCase() === type && x.name === el.name)
+          : [el];
+        group.forEach(g => handled.add(g));
+        const options = group
+          .map(g => ({ label: getLabel(g), el: g }))
+          .filter(o => o.label);
+        if (!options.length) continue;
+        const question =
+          group.length > 1 ? groupQuestion(group) : getLabel(el) || groupQuestion(group);
+        const required = group.some(g => g.required);
+        const labels = options.map(o => o.label);
+        if (type === 'radio') {
+          fields.push({ id, question, required, type: 'radio', options: labels });
+          registry[id] = { kind: 'radio-native', options };
+        } else {
+          fields.push({ id, question, required, type: 'checkbox', options: labels });
+          registry[id] = { kind: 'checkbox-native', options };
+        }
+        continue;
+      }
+
+      if (tag === 'select') {
+        const options = [...el.options]
+          .map(o => o.text.trim())
+          .filter(t => t && !/^(select|choose|--|please)/i.test(t));
+        const question = getLabel(el);
+        if (!question) continue;
+        fields.push({ id, question, required: el.required, type: 'dropdown', options });
+        registry[id] = { kind: 'select-native', el };
+        continue;
+      }
+
+      if (tag === 'textarea') {
+        const question = getLabel(el);
+        if (!question) continue;
+        fields.push({ id, question, required: el.required, type: 'paragraph' });
+        registry[id] = { kind: 'textarea', el };
+        continue;
+      }
+
+      // text-like input (text/email/tel/number/url/date/search/…)
+      const question = getLabel(el);
+      if (!question) continue;
+      fields.push({ id, question, required: el.required, type: 'text' });
+      registry[id] = { kind: 'text', el };
+    }
+
+    return { fields, fileFields, registry };
+  }
+
+  /* ------------------------ Scan: Google Forms ----------------------------- */
+  function scanGoogle() {
     const items = [...document.querySelectorAll('div[role="listitem"]')];
     const fields = [];
     const fileFields = [];
@@ -179,6 +335,10 @@
     return { fields, fileFields, registry };
   }
 
+  function scanForm() {
+    return isGoogleForm() ? scanGoogle() : scanGeneric();
+  }
+
   /* ----------------------------- Form filling ------------------------------ */
   function setNativeValue(el, value) {
     const proto =
@@ -190,48 +350,111 @@
     el.dispatchEvent(new Event('blur', { bubbles: true }));
   }
 
+  function setSelect(sel, ans) {
+    const opts = [...sel.options];
+    const want = String(ans);
+    const m =
+      opts.find(o => o.text.trim() === want) ||
+      opts.find(o => o.value === want) ||
+      opts.find(o => o.text.trim().toLowerCase() === want.toLowerCase());
+    if (!m) return false;
+    sel.value = m.value;
+    sel.dispatchEvent(new Event('input', { bubbles: true }));
+    sel.dispatchEvent(new Event('change', { bubbles: true }));
+    return true;
+  }
+
+  const eq = (a, b) => String(a) === String(b) ||
+    String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
+
   // Verify a field actually holds a value (so we never claim a silent failure as "filled").
   function isFilled(reg) {
     if (!reg) return false;
-    if (reg.kind === 'text' || reg.kind === 'textarea') return !!(reg.el.value || '').trim();
-    if (reg.kind === 'radio' || reg.kind === 'checkbox')
-      return reg.els.some(e => e.getAttribute('aria-checked') === 'true');
-    if (reg.kind === 'dropdown') {
-      const sel = reg.listbox.querySelector('[role="option"][aria-selected="true"]');
-      return !!(sel && sel.getAttribute('data-value'));
+    switch (reg.kind) {
+      case 'text':
+      case 'textarea':
+        return !!(reg.el.value || '').trim();
+      case 'select-native':
+        return !!(reg.el.value || '').trim();
+      case 'radio-native':
+      case 'checkbox-native':
+        return reg.options.some(o => o.el.checked);
+      case 'radio':
+      case 'checkbox':
+        return reg.els.some(e => e.getAttribute('aria-checked') === 'true');
+      case 'dropdown': {
+        const sel = reg.listbox.querySelector('[role="option"][aria-selected="true"]');
+        return !!(sel && sel.getAttribute('data-value'));
+      }
+      default:
+        return false;
     }
-    return false;
   }
 
   async function fillOne(reg, ans) {
     if (!reg || isEmpty(ans)) return false;
     try {
-      if (reg.kind === 'text' || reg.kind === 'textarea') {
-        reg.el.focus();
-        setNativeValue(reg.el, String(ans));
-        return true;
-      }
-      if (reg.kind === 'radio') {
-        const m = reg.els.find(
-          r => (r.getAttribute('data-value') || r.getAttribute('aria-label')) === ans
-        );
-        if (m) { m.click(); return true; }
-      } else if (reg.kind === 'checkbox') {
-        let any = false;
-        (Array.isArray(ans) ? ans : [ans]).forEach(a => {
+      switch (reg.kind) {
+        case 'text':
+        case 'textarea':
+          reg.el.focus();
+          setNativeValue(reg.el, String(ans));
+          return true;
+
+        case 'select-native':
+          return setSelect(reg.el, ans);
+
+        case 'radio-native': {
+          const o = reg.options.find(o => eq(o.label, ans));
+          if (o) {
+            if (!o.el.checked) o.el.click();
+            o.el.dispatchEvent(new Event('change', { bubbles: true }));
+            return true;
+          }
+          return false;
+        }
+
+        case 'checkbox-native': {
+          let any = false;
+          (Array.isArray(ans) ? ans : [ans]).forEach(a => {
+            const o = reg.options.find(o => eq(o.label, a));
+            if (o) {
+              if (!o.el.checked) o.el.click();
+              o.el.dispatchEvent(new Event('change', { bubbles: true }));
+              any = true;
+            }
+          });
+          return any;
+        }
+
+        case 'radio': {
           const m = reg.els.find(
-            c => (c.getAttribute('data-answer-value') || c.getAttribute('aria-label')) === a
+            r => (r.getAttribute('data-value') || r.getAttribute('aria-label')) === ans
           );
-          if (m) { m.click(); any = true; }
-        });
-        return any;
-      } else if (reg.kind === 'dropdown') {
-        reg.listbox.click();
-        await sleep(250);
-        const opt = [...reg.item.querySelectorAll('[role="option"]')].find(
-          o => o.getAttribute('data-value') === ans
-        );
-        if (opt) { opt.click(); await sleep(120); return true; }
+          if (m) { m.click(); return true; }
+          return false;
+        }
+
+        case 'checkbox': {
+          let any = false;
+          (Array.isArray(ans) ? ans : [ans]).forEach(a => {
+            const m = reg.els.find(
+              c => (c.getAttribute('data-answer-value') || c.getAttribute('aria-label')) === a
+            );
+            if (m) { m.click(); any = true; }
+          });
+          return any;
+        }
+
+        case 'dropdown': {
+          reg.listbox.click();
+          await sleep(250);
+          const opt = [...reg.item.querySelectorAll('[role="option"]')].find(
+            o => o.getAttribute('data-value') === ans
+          );
+          if (opt) { opt.click(); await sleep(120); return true; }
+          return false;
+        }
       }
     } catch (e) {
       console.warn('[form-filler] fill failed', e);
@@ -240,10 +463,19 @@
   }
 
   function clickSubmit() {
-    const submit = [...document.querySelectorAll('div[role="button"]')].find(
+    // Google Forms custom button
+    const g = [...document.querySelectorAll('div[role="button"]')].find(
       b => b.innerText && b.innerText.trim().toLowerCase() === 'submit'
     );
-    if (submit) { submit.click(); return true; }
+    if (g) { g.click(); return true; }
+    // Native submit
+    const n = document.querySelector('button[type="submit"], input[type="submit"]');
+    if (n) { n.click(); return true; }
+    // Text-matched button fallback
+    const t = [...document.querySelectorAll('button, [role="button"], input[type="button"]')].find(
+      b => ['submit', 'send', 'save', 'continue'].includes(((b.innerText || b.value || '') + '').trim().toLowerCase())
+    );
+    if (t) { t.click(); return true; }
     return false;
   }
 
@@ -266,6 +498,7 @@
     }
   }
   function ensureExtras() {
+    if (!isGoogleForm()) return;
     setControl(/as the email to be included|record\s+\S+@\S+\s+as the email/i, true);
     setControl(/send me a copy/i, true);
   }
@@ -327,6 +560,78 @@
     }
   }
 
+  /* ------------------------------ File upload ------------------------------ */
+  // Pull the resume bytes from the bridge (via the service worker — an HTTPS page
+  // can't fetch http://127.0.0.1 itself) and rebuild a real File in the page.
+  function fetchResumeFile(filename) {
+    return new Promise(resolve => {
+      chrome.runtime.sendMessage({ type: 'RESUME' }, resp => {
+        if (chrome.runtime.lastError || !resp || !resp.ok) return resolve(null);
+        try {
+          const bin = atob(resp.data);
+          const arr = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+          resolve(new File([arr], filename, { type: resp.mime }));
+        } catch (_) {
+          resolve(null);
+        }
+      });
+    });
+  }
+
+  // Attach a File to a native <input type="file"> the way a real drop/pick would.
+  // (This is the only kind of upload a page script can drive — Google Drive's
+  //  picker runs in a cross-origin frame and cannot be injected into.)
+  function attachNativeFile(inputEl, file) {
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    inputEl.files = dt.files;
+    inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+    inputEl.dispatchEvent(new Event('change', { bubbles: true }));
+    return inputEl.files.length > 0;
+  }
+
+  async function handleFileFields(fileFields, registry, resumePath) {
+    const filename = (resumePath && resumePath.split('/').pop()) || 'resume.pdf';
+    let needsCopyBtn = false;
+
+    for (const ff of fileFields) {
+      const reg = registry[ff.id];
+      if (reg && reg.kind === 'file-native') {
+        const file = await fetchResumeFile(filename);
+        if (file && attachNativeFile(reg.el, file)) {
+          note(`✓ Attached ${filename} to “${ff.question}”.`, '#e6f4ea');
+          continue;
+        }
+        note(
+          `Couldn't auto-attach the file for “${ff.question}”.\n` +
+            `Upload manually: ${resumePath || 'your file'}`,
+          '#fce8e6'
+        );
+      } else {
+        // Google Forms / Google Drive picker — cannot be filled programmatically.
+        needsCopyBtn = true;
+        note(
+          `⬆ “${ff.question}” uses Google Drive's uploader, which only accepts a real file pick.\n` +
+            `Click “Copy resume path”, then in the upload dialog press Ctrl+L, paste, and hit Enter:\n` +
+            `${resumePath || 'your file'}`,
+          '#fef7e0'
+        );
+      }
+    }
+
+    if (needsCopyBtn && resumePath) {
+      button('Copy resume path', false, async () => {
+        try {
+          await navigator.clipboard.writeText(resumePath);
+          note('✓ Path copied. In the Browse dialog: Ctrl+L → paste → Enter.', '#e6f4ea');
+        } catch (_) {
+          note('Copy failed. Path:\n' + resumePath, '#fce8e6');
+        }
+      });
+    }
+  }
+
   /* --------------------------------- Main ---------------------------------- */
   async function main() {
     UI.show();
@@ -375,19 +680,14 @@
       afterFill(answers, done, resp.resumePath);
     });
 
-    function afterFill(answers, done, resumePath) {
+    async function afterFill(answers, done, resumePath) {
       const unknowns = fields.filter(f => !isFilled(registry[f.id]));
       UI.clearList();
       UI.progress(done, total || 1);
       UI.status(`Filled ${done} of ${total} field${total === 1 ? '' : 's'}.`);
 
       if (fileFields.length) {
-        note(
-          `⬆ Resume upload is manual (Google Drive picker): click “Add File” → “Upload” tab → choose:\n${
-            resumePath || 'your resume file'
-          }`,
-          '#fce8e6'
-        );
+        await handleFileFields(fileFields, registry, resumePath);
       }
 
       const finishBtn = () => {
@@ -423,7 +723,7 @@
             });
           }
           if (fileFields.length)
-            note('Don’t forget the resume upload (click “Add File”).', '#fef7e0');
+            note('Don’t forget the file upload.', '#fef7e0');
           finishBtn();
         });
         button('Skip', false, () => {

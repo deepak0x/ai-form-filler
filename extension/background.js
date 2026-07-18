@@ -19,6 +19,26 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true; // keep the message channel open for the async response
   }
 
+  if (msg.type === 'RESUME') {
+    fetch(`${BRIDGE}/resume`)
+      .then(async r => {
+        if (!r.ok) {
+          const d = await r.json().catch(() => ({}));
+          throw new Error(d.error || `bridge ${r.status}`);
+        }
+        const bytes = new Uint8Array(await r.arrayBuffer());
+        let bin = '';
+        for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+        sendResponse({
+          ok: true,
+          data: btoa(bin),
+          mime: r.headers.get('Content-Type') || 'application/octet-stream'
+        });
+      })
+      .catch(e => sendResponse({ ok: false, error: String(e.message || e) }));
+    return true;
+  }
+
   if (msg.type === 'REMEMBER') {
     fetch(`${BRIDGE}/remember`, {
       method: 'POST',

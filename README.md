@@ -96,6 +96,18 @@ Any form tab (you clicked Start)
 2. **Open any form**, click the extension icon (it should say Bridge: connected), and hit
    Start, scan & fill. Toggle "Auto-submit after filling" first if you want it hands-free.
 
+## Platform notes
+
+The extension is the same on every OS. Only the bridge differs, and only in how you keep it
+running. Manual start (`node server.js`) works everywhere.
+
+- **Linux** — works as-is. Optional always-on service below.
+- **macOS** — works as-is; run `node server.js`, or use a process manager like `pm2` to keep it alive.
+- **Windows** — works via `claude.cmd` (handled automatically). Run `node server.js` in a terminal,
+  or use `pm2` / Task Scheduler to keep it alive. WSL also works if you prefer a Linux setup.
+
+Whatever the OS, `claude` (or `claude.cmd` on Windows) must be installed and logged in.
+
 ## Run the bridge automatically (Linux / systemd)
 
 So you never have to start `server.js` by hand:
@@ -108,6 +120,13 @@ journalctl --user -u form-filler-bridge -f            # live logs
 The unit lives at `~/.config/systemd/user/form-filler-bridge.service`. Because it spawns the
 `claude` CLI, your Claude Code login has to stay valid. If fills start failing, check the logs for an
 auth error and run `claude` once to log back in.
+
+On macOS or Windows, the simplest always-on option is `pm2`:
+```bash
+npm i -g pm2
+pm2 start server.js --name form-filler-bridge
+pm2 save
+```
 
 ## Quick test (no browser)
 

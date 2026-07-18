@@ -52,7 +52,9 @@ Example: {"q0":"Jane Doe","q1":"jane.doe@example.com","q2":null,"q3":["Python","
 
 function runClaude(prompt) {
   return new Promise((resolve, reject) => {
-    const child = spawn('claude', ['-p', prompt], { cwd: __dirname });
+    // On Windows the CLI is `claude.cmd`; Node's spawn won't auto-append .cmd.
+    const claudeCmd = process.platform === 'win32' ? 'claude.cmd' : 'claude';
+    const child = spawn(claudeCmd, ['-p', prompt], { cwd: __dirname });
     let out = '', err = '';
     child.stdout.on('data', d => (out += d));
     child.stderr.on('data', d => (err += d));
